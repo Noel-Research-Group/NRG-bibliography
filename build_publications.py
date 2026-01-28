@@ -113,6 +113,13 @@ def _parse_date(entry: dict[str, Any]) -> Optional[date]:
 
     return date(y, mo, da)
 
+def _normalize_pages(pages: str) -> str:
+    pages = _clean(pages)
+    if not pages:
+        return ""
+    # BibTeX page ranges use double hyphen
+    return pages.replace("--", "-")
+    # If you prefer en dash: return pages.replace("--", "–")
 
 def _split_authors(author_field: str) -> list[str]:
     return [a.strip().strip(",") for a in author_field.split(" and ") if a.strip()]
@@ -161,7 +168,7 @@ def _format_author_list(author_field: str) -> str:
         return f"{authors[0]} and {authors[1]}"
 
     # matches examples: semicolons, and “; and” before last
-    return "; ".join(authors[:-1]) + "; and " + authors[-1]
+    return "; ".join(authors[:-1]) + " and " + authors[-1]
 
 
 def _doi_href(doi: str, url: str | None) -> str:
@@ -257,11 +264,11 @@ class Entry:
 
         year = str(self.year) if self.year else ""
         volume = html.escape(self.volume)
-        pages = html.escape(self.pages)
+        pages = html.escape(_normalize_pages(self.pages))
 
         parts: list[str] = []
         if authors:
-            parts.append(f"{html.escape(authors)}.")
+            parts.append(f"{html.escape(authors)}")
         if title:
             parts.append(title)
 
