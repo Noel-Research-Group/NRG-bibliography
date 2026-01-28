@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import bibtexparser
 from bibtexparser.bparser import BibTexParser
@@ -16,7 +18,7 @@ def _clean(s: str | None) -> str:
     return (s or "").strip()
 
 
-def _first_doi(s: str) -> str | None:
+def _first_doi(s: str | None) -> str | None:
     s = _clean(s)
     if not s:
         return None
@@ -24,27 +26,82 @@ def _first_doi(s: str) -> str | None:
     return m.group(0) if m else None
 
 
-def _doi_link(doi: str) -> str:
-    doi = doi.strip()
-    url = f"https://doi.org/{doi}"
-    # clickable but displays "DOI: 10...."
-    return f'<a href="{url}" target="_blank" rel="noopener">DOI: {doi}</a>'
+def _parse_year(s: str | None) -> int:
+    s = _clean(s)
+    m = re.search(r"\b(19|20)\d{2}\b", s)
+    return int(m.group(0)) if m else 0
+
+
+def _parse_date(entry: dict[str, Any]) -> Optional[date]:
+    """
+    Try a few BibTeX-ish patterns:
+    - date = {2024-06-15}
+    - year/month/day fields
+    - month as number or name (jan/feb/...)
+    """
+    d = _clean(entry.get("date"))
+    if d:
+        # keep only leading YYYY-MM-DD if present
+        m = re.match(r"^\s*(\d{4})-(\d{2})-(\d{2})", d)
+        if m:
+            y, mo, da = map(int, m.groups())
+            return date(y, mo, da)
+        # sometimes just YYYY-MM
+        m = re.match(r"^\s*(\d{4})-(\d{2})", d)
+        if m:
+            y, mo = map(int, m.groups())
+            return date(y, mo, 1)
+
+    y = _parse_year(entry.get("year"))
+    if not y:
+        return None
+
+    month_raw = _clean(entry.get("month"))
+    day_raw = _clean(entry.get("day"))
+
+    month_map = {
+        "jan": 1, "january": 1,
+        "feb": 2, "february": 2,
+        "mar": 3, "march": 3,
+        "apr": 4, "april": 4,
+        "may": 5,
+        "jun": 6, "june": 6,
+        "jul": 7, "july": 7,
+        "aug": 8, "august": 8,
+        "sep": 9, "september": 9,
+        "oct": 10, "october": 10,
+        "nov": 11, "november": 11,
+        "dec": 12, "december": 12,
+    }
+
+    mo = 1
+    if month_raw:
+        if month_raw.isdigit():
+            mo = max(1, min(12, int(month_raw)))
+        else:
+            mo = month_map.get(month_raw.lower().strip("."), 1)
+
+    da = 1
+    if day_raw and day_raw.isdigit():
+        da = max(1, min(31, int(day_raw)))
+
+    return date(y, mo, da)
 
 
 def _split_authors(author_field: str) -> list[str]:
-    # BibTeX "and" separator
-    parts = [a.strip() for a in author_field.split(" and ") if a.strip()]
-    return parts
+    return [a.strip().strip(",") for a in author_field.split(" and ") if a.strip()]
 
 
 def _format_one_author(name: str) -> str:
     """
-    Convert "Last, First Middle" or "First Middle Last" to "Last, F. M."
+    Convert "Last, First Middle" or "First Middle Last" -> "Last, F. M."
     """
-    name = name.strip()
+    name = name.strip().strip(",")
+    if not name:
+        return ""
+
     if "," in name:
-        last, first = [p.strip() for p in name.split(",", 1)]
-        given = first
+        last, given = [p.strip() for p in name.split(",", 1)]
     else:
         bits = name.split()
         if len(bits) == 1:
@@ -52,12 +109,13 @@ def _format_one_author(name: str) -> str:
         last = bits[-1]
         given = " ".join(bits[:-1])
 
-    initials = []
-    for token in re.split(r"[\s\-]+", given):
-        token = token.strip().strip(".")
-        if not token:
+    initials: list[str] = []
+    for tok in re.split(r"[\s\-]+", given):
+        tok = tok.strip().strip(".").strip(",")
+        if not tok:
             continue
-        initials.append(token[0].upper() + ".")
+        initials.append(tok[0].upper() + ".")
+
     if initials:
         return f"{last}, {' '.join(initials)}"
     return last
@@ -65,12 +123,36 @@ def _format_one_author(name: str) -> str:
 
 def _format_author_list(author_field: str) -> str:
     authors = [_format_one_author(a) for a in _split_authors(author_field)]
+    authors = [a for a in authors if a]
     if not authors:
         return ""
+
     if len(authors) == 1:
         return authors[0]
-    # semicolons + "and" before last
-    return "; ".join(authors[:-1]) + " and " + authors[-1]
+
+    if len(authors) == 2:
+        # matches house style: "A and B"
+        return f"{authors[0]} and {authors[1]}"
+
+    # matches examples: semicolons, and “; and” before last
+    return "; ".join(authors[:-1]) + "; and " + authors[-1]
+
+
+def _doi_href(doi: str, url: str | None) -> str:
+    """
+    If url looks like a DOI landing page and contains the DOI, prefer it (e.g., Science).
+    Else default to https://doi.org/<doi>.
+    """
+    url = _clean(url)
+    if url and doi.lower() in url.lower() and ("doi" in url.lower() or "10." in url):
+        return url
+    return f"https://doi.org/{doi}"
+
+
+def _doi_anchor(doi: str, href: str) -> str:
+    doi = html.escape(doi)
+    href = html.escape(href, quote=True)
+    return f'<a href="{href}">{doi}</a>'
 
 
 @dataclass
@@ -84,18 +166,16 @@ class Entry:
     volume: str
     pages: str
     doi: str | None
+    doi_url: str | None
     preprint_doi: str | None
+    published_date: Optional[date]
 
     @staticmethod
     def from_bib(e: dict[str, Any]) -> "Entry":
-        year_raw = _clean(e.get("year"))
-        try:
-            year = int(re.findall(r"\d{4}", year_raw)[0])
-        except Exception:
-            year = 0
-
-        doi = _first_doi(_clean(e.get("doi")))
-        preprint_doi = _first_doi(_clean(e.get("preprint_doi")))
+        year = _parse_year(e.get("year"))
+        doi = _first_doi(e.get("doi"))
+        preprint_doi = _first_doi(e.get("preprint_doi"))
+        published_date = _parse_date(e)
 
         return Entry(
             key=_clean(e.get("ID")),
@@ -107,70 +187,95 @@ class Entry:
             volume=_clean(e.get("volume")),
             pages=_clean(e.get("pages")),
             doi=doi,
+            doi_url=_clean(e.get("url")) or None,
             preprint_doi=preprint_doi,
+            published_date=published_date,
         )
 
-    def render_line(self) -> str:
+    def sort_key(self):
+        # newest first: use full date if available; else Jan 1 of year; else very old
+        d = self.published_date or (date(self.year, 1, 1) if self.year else date(1900, 1, 1))
+        return (d, self.title.lower())
+
+    def render_html_entry(self) -> str:
+        """
+        Match your target house HTML as close as possible.
+
+        Pattern:
+        Authors. Title <em> Journal</em>, <strong>YEAR</strong>, <em>VOLUME,</em> PAGES, DOI: <a href="...">DOI</a> (For the preprint version, see <a ...>DOI</a>)
+        """
         authors = _format_author_list(self.author)
+        title = html.escape(self.title)
+
+        journal = html.escape(self.journal)
+        year = str(self.year) if self.year else ""
+        volume = html.escape(self.volume)
+        pages = html.escape(self.pages)
+
         parts: list[str] = []
         if authors:
-            parts.append(f"{authors}.")
-        if self.title:
-            parts.append(self.title)
-        if self.journal:
-            parts.append(self.journal + ",")
-        if self.year:
-            parts.append(str(self.year) + ",")
-        if self.volume:
-            parts.append(self.volume + ",")
-        if self.pages:
-            parts.append(self.pages + ",")
-        if self.doi:
-            parts.append(_doi_link(self.doi))
-        # join with spaces; commas already included above
-        txt = " ".join([p for p in parts if p]).strip()
-        # clean up any ", ," accidents
-        txt = re.sub(r",\s*,", ",", txt)
-        txt = txt.replace(" ,", ",")
-        return txt
+            parts.append(f"{html.escape(authors)}.")
+        if title:
+            parts.append(title)
 
-    def render_html(self) -> str:
-        main = self.render_line()
-        extra = ""
+        # Journal is italic, with a leading space INSIDE <em> to match examples: <em> Matter</em>
+        if journal:
+            parts.append(f"<em> {journal}</em>,")
+        if year:
+            parts.append(f"<strong>{html.escape(year)}</strong>,")
+
+        # volume in italics with trailing comma inside the <em> tag: <em>7,</em>
+        if volume:
+            parts.append(f"<em>{volume},</em>")
+
+        # pages are plain, followed by comma
+        if pages:
+            parts.append(f"{pages},")
+
+        # DOI block
+        if self.doi:
+            href = _doi_href(self.doi, self.doi_url)
+            parts.append(f"DOI: {_doi_anchor(self.doi, href)}")
+
+        # Join with spaces, then clean comma spacing a bit
+        txt = " ".join([p for p in parts if p]).strip()
+        txt = re.sub(r"\s+,", ",", txt)  # avoid " ,"
+        txt = re.sub(r",\s*,", ",", txt)
+
+        # Preprint note, exactly as your example
         if self.preprint_doi:
-            extra = (
-                f' <span class="nrg-note">(Preprint: {_doi_link(self.preprint_doi)})</span>'
-            )
-        return f'<div class="nrg-pub">{main}{extra}</div>'
+            pre_href = f"https://doi.org/{self.preprint_doi}"
+            txt += f'(For the preprint version, see {_doi_anchor(self.preprint_doi, pre_href)})'
+
+        return f'<div class="csl-entry">{txt}</div>'
 
 
 def load_entries(bib_path: Path) -> list[Entry]:
     parser = BibTexParser(common_strings=True)
     with bib_path.open("r", encoding="utf-8") as f:
         db = bibtexparser.load(f, parser=parser)
-    entries = [Entry.from_bib(e) for e in db.entries]
-    return entries
+    return [Entry.from_bib(e) for e in db.entries]
 
 
-def build_html(entries: list[Entry], title: str = "Publications") -> str:
-    # sort: year desc, then title
-    entries = sorted(entries, key=lambda e: (-e.year, e.title.lower()))
+def build_html(entries: list[Entry]) -> str:
+    # sort by date (newest first)
+    entries = sorted(entries, key=lambda e: e.sort_key(), reverse=True)
 
-    # group by year
-    years: dict[int, list[Entry]] = {}
+    # group by year (descending)
+    by_year: dict[int, list[Entry]] = {}
     for e in entries:
-        years.setdefault(e.year, []).append(e)
+        if e.year:
+            by_year.setdefault(e.year, []).append(e)
 
-    year_keys = sorted([y for y in years.keys() if y], reverse=True)
+    years = sorted(by_year.keys(), reverse=True)
 
     blocks: list[str] = []
-    blocks.append('<div class="nrg-publications">')
-    blocks.append(f"<h1>{title}</h1>")
+    blocks.append('<div class="csl-bib-body">')
 
-    for y in year_keys:
+    for y in years:
         blocks.append(f'<h2 class="wpmgrouptitle">{y}</h2>')
-        for e in years[y]:
-            blocks.append(e.render_html())
+        for e in by_year[y]:
+            blocks.append(e.render_html_entry())
 
     blocks.append("</div>")
     return "\n".join(blocks)
@@ -182,9 +287,9 @@ def main() -> None:
     out = root / "publications.html"
 
     entries = load_entries(bib)
-    html = build_html(entries, title="Publications")
+    html_out = build_html(entries)
 
-    out.write_text(html + "\n", encoding="utf-8")
+    out.write_text(html_out + "\n", encoding="utf-8")
     print(f"Wrote {out}")
 
 
