@@ -67,7 +67,7 @@ def load_bib(path: Path) -> list[BibItem]:
                 title=_clean(e.get("title")),
                 journal=_clean(e.get("journal") or e.get("booktitle") or e.get("howpublished")),
                 year=_parse_year(e.get("year")),
-                volume=_clean(e.get("volume")),
+                volume=_clean(_normalize_pages(e.get("volume"))),
                 issue=_clean(e.get("number") or e.get("issue")),
                 pages=_normalize_pages(e.get("pages")),
                 url=_clean(e.get("url")),
@@ -99,18 +99,35 @@ def cr_get_first(msg: dict[str, Any], field: str) -> str:
     return _clean(str(v)) if v is not None else ""
 
 
-def cr_year(msg: dict[str, Any]) -> str:
-    dp = (msg.get("issued") or {}).get("date-parts") or []
+def _year_from_date_parts(msg: dict[str, Any], field: str) -> str:
+    """
+    Extract year from Crossref date-parts for a given field, e.g.
+    msg["published-print"]["date-parts"] == [[2016, 1, 15]]
+    """
+    dp = (msg.get(field) or {}).get("date-parts") or []
     if dp and dp[0] and isinstance(dp[0][0], int):
         return str(dp[0][0])
+    return ""
+
+
+def cr_year(msg: dict[str, Any]) -> str:
+    """
+    Prefer the most 'final' publication year:
+      1) published-print
+      2) published-online
+      3) published
+      4) issued (fallback)
+    """
+    for field in ("published-print", "published-online", "published", "issued"):
+        y = _year_from_date_parts(msg, field)
+        if y:
+            return y
     return ""
 
 
 def compare(item: BibItem, msg: dict[str, Any]) -> dict[str, tuple[str, str]]:
     diffs: dict[str, tuple[str, str]] = {}
 
-    cr_title = cr_get_first(msg, "title")
-    cr_journal = cr_get_first(msg, "container-title")
     cr_vol = _clean(msg.get("volume"))
     cr_issue = _clean(msg.get("issue"))
     cr_pages = _normalize_pages(_clean(msg.get("page")))
