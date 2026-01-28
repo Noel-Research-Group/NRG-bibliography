@@ -122,8 +122,6 @@ def compare(item: BibItem, msg: dict[str, Any]) -> dict[str, tuple[str, str]]:
             diffs[field] = (bib_val, cr_val)
 
     # Only flag fields if Crossref actually has a value for them
-    chk("title", item.title, cr_title)
-    chk("journal", item.journal, cr_journal)
     chk("year", item.year, cr_y)
     chk("volume", item.volume, cr_vol)
     chk("issue", item.issue, cr_issue)
