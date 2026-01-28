@@ -154,6 +154,27 @@ def _doi_anchor(doi: str, href: str) -> str:
     href = html.escape(href, quote=True)
     return f'<a href="{href}">{doi}</a>'
 
+def _extract_preprint_doi(entry: dict[str, Any]) -> str | None:
+    """
+    Extract preprint_doi from either:
+      - a dedicated field (if present)
+      - or from annotation like: 'preprint_doi:10.26434/...'
+    """
+    # Preferred: explicit field
+    direct = entry.get("preprint_doi")
+    if direct:
+        return _first_doi(direct)
+
+    annotation = _clean(entry.get("annotation"))
+    if not annotation:
+        return None
+
+    # Look for preprint_doi:10....
+    m = re.search(r"preprintdoi\s*:\s*(10\.\d{4,9}/[^\s,;]+)", annotation, re.I)
+    if m:
+        return m.group(1)
+
+    return None
 
 @dataclass
 class Entry:
@@ -174,7 +195,7 @@ class Entry:
     def from_bib(e: dict[str, Any]) -> "Entry":
         year = _parse_year(e.get("year"))
         doi = _first_doi(e.get("doi"))
-        preprint_doi = _first_doi(e.get("preprint_doi"))
+        preprint_doi = _extract_preprint_doi(e)
         published_date = _parse_date(e)
 
         return Entry(
@@ -222,15 +243,15 @@ class Entry:
         if journal:
             parts.append(f"<em> {journal}</em>,")
         if year:
-            parts.append(f"<strong>{html.escape(year)}</strong>,")
+            parts.append(f"<strong>{html.escape(year)}</strong>, ")
 
         # volume in italics with trailing comma inside the <em> tag: <em>7,</em>
         if volume:
-            parts.append(f"<em>{volume},</em>")
+            parts.append(f"<em>{volume}, </em>")
 
         # pages are plain, followed by comma
         if pages:
-            parts.append(f"{pages},")
+            parts.append(f"{pages}, ")
 
         # DOI block
         if self.doi:
@@ -245,7 +266,7 @@ class Entry:
         # Preprint note, exactly as your example
         if self.preprint_doi:
             pre_href = f"https://doi.org/{self.preprint_doi}"
-            txt += f'(For the preprint version, see {_doi_anchor(self.preprint_doi, pre_href)})'
+            txt += f' (For the preprint version, see {_doi_anchor(self.preprint_doi, pre_href)})'
 
         return f'<div class="csl-entry">{txt}</div>'
 
