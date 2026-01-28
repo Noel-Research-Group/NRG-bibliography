@@ -209,6 +209,25 @@ def _extract_preprint_doi(entry: dict[str, Any]) -> str | None:
 
     return None
 
+def _infer_journal(entry: dict[str, Any], doi: str | None) -> str:
+    """
+    Infer journal/container when missing.
+    Currently handles ChemRxiv preprints.
+    """
+    journal = _clean(
+        entry.get("journal")
+        or entry.get("booktitle")
+        or entry.get("howpublished")
+    )
+
+    if journal:
+        return journal
+
+    if doi and doi.lower().startswith("10.26434/chemrxiv"):
+        return "ChemRxiv"
+
+    return ""
+
 @dataclass
 class Entry:
     key: str
@@ -236,7 +255,7 @@ class Entry:
             entrytype=_clean(e.get("ENTRYTYPE")),
             title=_clean(e.get("title")),
             author=_clean(e.get("author")),
-            journal=_clean(e.get("journal") or e.get("booktitle") or e.get("howpublished") or ""),
+            journal=_infer_journal(e, doi),
             year=year,
             volume=_clean(e.get("volume")),
             pages=_clean(e.get("pages")),
