@@ -10,9 +10,35 @@ from typing import Any, Optional
 
 import bibtexparser
 from bibtexparser.bparser import BibTexParser
+from pylatexenc.latex2text import LatexNodes2Text
+
+_LATEX = LatexNodes2Text()
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.I)
 
+def _latex_to_text(s: str | None) -> str:
+    """
+    Convert common BibTeX/LaTeX markup to readable Unicode text.
+    - Decodes accents (No{\"e}l -> Noël)
+    - Converts simple math (\beta -> β)
+    - Drops formatting commands (\emph{via} -> via)
+    """
+    s = _clean(s)
+    if not s:
+        return ""
+
+    # bibtex often wraps bits in { ... } to preserve capitalization
+    # pylatexenc handles most, but we also remove stray braces after conversion.
+    try:
+        txt = _LATEX.latex_to_text(s)
+    except Exception:
+        txt = s
+
+    # remove lingering braces that sometimes survive
+    txt = txt.replace("{", "").replace("}", "")
+    # collapse excessive whitespace
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
 
 def _clean(s: str | None) -> str:
     return (s or "").strip()
@@ -96,7 +122,7 @@ def _format_one_author(name: str) -> str:
     """
     Convert "Last, First Middle" or "First Middle Last" -> "Last, F. M."
     """
-    name = name.strip().strip(",")
+    name = _latex_to_text(name).strip().strip(",")
     if not name:
         return ""
 
@@ -225,10 +251,10 @@ class Entry:
         Pattern:
         Authors. Title <em> Journal</em>, <strong>YEAR</strong>, <em>VOLUME,</em> PAGES, DOI: <a href="...">DOI</a> (For the preprint version, see <a ...>DOI</a>)
         """
-        authors = _format_author_list(self.author)
-        title = html.escape(self.title)
+        authors = _latex_to_text(_format_author_list(self.author))
+        title = html.escape(_latex_to_text(self.title))
+        journal = html.escape(_latex_to_text(self.journal))
 
-        journal = html.escape(self.journal)
         year = str(self.year) if self.year else ""
         volume = html.escape(self.volume)
         pages = html.escape(self.pages)
