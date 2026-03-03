@@ -230,6 +230,7 @@ def _infer_journal(entry: dict[str, Any], doi: str | None) -> str:
 
 @dataclass
 class Entry:
+    indx: int
     key: str
     entrytype: str
     title: str
@@ -244,13 +245,14 @@ class Entry:
     published_date: Optional[date]
 
     @staticmethod
-    def from_bib(e: dict[str, Any]) -> "Entry":
+    def from_bib(e: dict[str, Any], idx:int) -> "Entry":
         year = _parse_year(e.get("year"))
         doi = _first_doi(e.get("doi"))
         preprint_doi = _extract_preprint_doi(e)
         published_date = _parse_date(e)
 
         return Entry(
+            indx=idx,
             key=_clean(e.get("ID")),
             entrytype=_clean(e.get("ENTRYTYPE")),
             title=_clean(e.get("title")),
@@ -268,7 +270,8 @@ class Entry:
     def sort_key(self):
         # newest first: use full date if available; else Jan 1 of year; else very old
         d = self.published_date or (date(self.year, 1, 1) if self.year else date(1900, 1, 1))
-        return (d, self.title.lower())
+        # return (d, self.title.lower())
+        return (d, self.indx)
 
     def render_html_entry(self) -> str:
         """
@@ -327,7 +330,7 @@ def load_entries(bib_path: Path) -> list[Entry]:
     parser = BibTexParser(common_strings=True)
     with bib_path.open("r", encoding="utf-8") as f:
         db = bibtexparser.load(f, parser=parser)
-    return [Entry.from_bib(e) for e in db.entries]
+    return [Entry.from_bib(e, idx=i) for i, e in enumerate(db.entries)]
 
 
 def build_html(entries: list[Entry]) -> str:
