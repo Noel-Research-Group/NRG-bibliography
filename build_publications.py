@@ -326,10 +326,34 @@ class Entry:
         return f'<div class="csl-entry">{txt}</div>'
 
 
+ENTRY_START_RE = re.compile(r"^@(?!(?:comment|string|preamble)\b)\w+\s*\{", re.I | re.M)
+
+
+def _check_all_entries_parsed(raw: str, parsed: list[dict[str, Any]]) -> None:
+    """
+    bibtexparser drops a malformed entry silently, which means a new paper can
+    disappear from the output with a green build. Compare the number of @entry
+    headers in the file against what came back, and fail loudly on a mismatch.
+    """
+    expected = len(ENTRY_START_RE.findall(raw))
+    if expected == len(parsed):
+        return
+
+    hint = ""
+    if re.search(r"^\s*%", raw, re.M):
+        # '%' is not a comment character here: it makes the parser skip the entry
+        hint = " Lines starting with '%' break the entry they are in; delete them."
+    raise SystemExit(
+        f"publications.bib: {expected} entries in the file but only {len(parsed)} parsed."
+        f"{hint}"
+    )
+
+
 def load_entries(bib_path: Path) -> list[Entry]:
     parser = BibTexParser(common_strings=True)
-    with bib_path.open("r", encoding="utf-8") as f:
-        db = bibtexparser.load(f, parser=parser)
+    raw = bib_path.read_text(encoding="utf-8")
+    db = bibtexparser.loads(raw, parser=parser)
+    _check_all_entries_parsed(raw, db.entries)
     return [Entry.from_bib(e, idx=i) for i, e in enumerate(db.entries)]
 
 
