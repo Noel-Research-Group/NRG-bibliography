@@ -273,7 +273,7 @@ class Entry:
         # return (d, self.title.lower())
         return (d, self.indx)
 
-    def render_html_entry(self) -> str:
+    def render_html_entry(self, number: int | None = None) -> str:
         """
         Match your target house HTML as close as possible.
 
@@ -322,6 +322,10 @@ class Entry:
         if self.preprint_doi:
             pre_href = f"https://doi.org/{self.preprint_doi}"
             txt += f' (For the preprint version, see {_doi_anchor(self.preprint_doi, pre_href)})'
+
+        # Number baked into the text (newest = highest), so the site CSS needs no counter
+        if number is not None:
+            txt = f"{number}. {txt}"
 
         return f'<div class="csl-entry">{txt}</div>'
 
@@ -372,10 +376,12 @@ def build_html(entries: list[Entry]) -> str:
     blocks: list[str] = []
     blocks.append('<div class="csl-bib-body">')
 
+    n = sum(len(v) for v in by_year.values())
     for y in years:
         blocks.append(f'<h2 class="wpmgrouptitle">{y}</h2>')
         for e in by_year[y]:
-            blocks.append(e.render_html_entry())
+            blocks.append(e.render_html_entry(number=n))
+            n -= 1
 
     blocks.append("</div>")
     return "\n".join(blocks)
